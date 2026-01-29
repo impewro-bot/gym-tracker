@@ -181,21 +181,37 @@ export default function GymTracker() {
   const getPRs = () => {
     const prs = {};
     history.forEach(w => {
-      const maxWeight = Math.max(...w.sets.map(s => s.w));
-      if (!prs[w.exercise] || maxWeight > prs[w.exercise].weight) {
-        prs[w.exercise] = { weight: maxWeight, date: w.date };
+      const isBodyweight = ['Pull-ups', 'Chin-ups', 'Dips', 'Push-ups'].some(bw => 
+        w.exercise.toLowerCase().includes(bw.toLowerCase())
+      );
+      
+      if (isBodyweight) {
+        const totalReps = w.sets.reduce((acc, s) => acc + s.r, 0);
+        if (!prs[w.exercise] || totalReps > prs[w.exercise].value) {
+          prs[w.exercise] = { value: totalReps, weight: 0, isBodyweight: true, date: w.date };
+        }
+      } else {
+        const maxWeight = Math.max(...w.sets.map(s => s.w));
+        if (!prs[w.exercise] || maxWeight > prs[w.exercise].value) {
+          prs[w.exercise] = { value: maxWeight, weight: maxWeight, isBodyweight: false, date: w.date };
+        }
       }
     });
     return prs;
   };
 
   const getChartData = (exerciseName) => {
+    const isBodyweight = ['Pull-ups', 'Chin-ups', 'Dips', 'Push-ups'].some(bw => 
+      exerciseName.toLowerCase().includes(bw.toLowerCase())
+    );
+    
     return history
       .filter(h => h.exercise === exerciseName)
       .map(h => ({ 
         date: new Date(h.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), 
         weight: Math.max(...h.sets.map(s => s.w)),
-        volume: h.sets.reduce((acc, s) => acc + (s.r * s.w), 0)
+        reps: h.sets.reduce((acc, s) => acc + s.r, 0),
+        value: isBodyweight ? h.sets.reduce((acc, s) => acc + s.r, 0) : Math.max(...h.sets.map(s => s.w))
       }));
   };
 
@@ -513,7 +529,13 @@ Keep it SHORT and actionable. Use bullet points. No fluff.`;
               const dayHistory = history.filter(h => h.day === progressDay);
               const volumeByDate = {};
               dayHistory.forEach(h => {
-                const vol = h.sets.reduce((acc, s) => acc + (s.r * s.w), 0);
+                const isBodyweight = ['Pull-ups', 'Chin-ups', 'Dips', 'Push-ups'].some(bw => 
+                  h.exercise.toLowerCase().includes(bw.toLowerCase())
+                );
+                // For bodyweight: count total reps. For weighted: count volume (reps × weight)
+                const vol = isBodyweight 
+                  ? h.sets.reduce((acc, s) => acc + s.r, 0) * 10 // Scale bodyweight reps for visibility
+                  : h.sets.reduce((acc, s) => acc + (s.r * s.w), 0);
                 if (!volumeByDate[h.date]) volumeByDate[h.date] = 0;
                 volumeByDate[h.date] += vol;
               });
@@ -532,7 +554,7 @@ Keep it SHORT and actionable. Use bullet points. No fluff.`;
                       <CartesianGrid strokeDasharray="3 3" stroke="#333" />
                       <XAxis dataKey="date" tick={{ fill: '#888', fontSize: 10 }} />
                       <YAxis tick={{ fill: '#888', fontSize: 10 }} />
-                      <Tooltip contentStyle={{ background: '#1a1a1a', border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(val) => [`${val} kg`, 'Volume']} />
+                      <Tooltip contentStyle={{ background: '#1a1a1a', border: 'none', borderRadius: 8, fontSize: 12 }} formatter={(val) => [`${val}`, 'Volume']} />
                       <Line type="monotone" dataKey="volume" stroke="#8b5cf6" strokeWidth={2} dot={{ fill: '#8b5cf6', r: 3 }} />
                     </LineChart>
                   </ResponsiveContainer>
@@ -547,15 +569,14 @@ Keep it SHORT and actionable. Use bullet points. No fluff.`;
               </h3>
               <div className="grid grid-cols-2 gap-2">
                 {Object.entries(prs)
-                  .filter(([ex, _]) => {
-                    const exercise = allExercises.find(e => e.name === ex);
-                    return exercises[progressDay]?.some(e => e.name === ex);
-                  })
-                  .filter(([_, pr]) => pr.weight > 0)
+                  .filter(([ex, _]) => exercises[progressDay]?.some(e => e.name === ex))
+                  .filter(([_, pr]) => pr.value > 0)
                   .map(([ex, pr]) => (
                     <div key={ex} className="bg-zinc-800 rounded-xl p-2.5">
                       <div className="text-xs text-zinc-400 truncate">{ex}</div>
-                      <div className="text-base font-bold text-violet-400">{pr.weight} kg</div>
+                      <div className="text-base font-bold text-violet-400">
+                        {pr.isBodyweight ? `${pr.value} reps` : `${pr.value} kg`}
+                      </div>
                     </div>
                   ))}
                 {Object.entries(prs).filter(([ex, _]) => exercises[progressDay]?.some(e => e.name === ex)).length === 0 && (
@@ -568,19 +589,31 @@ Keep it SHORT and actionable. Use bullet points. No fluff.`;
             {exercises[progressDay]?.map(ex => {
               const data = getChartData(ex.name);
               if (data.length < 2) return null;
+              
+              const isBodyweight = ['Pull-ups', 'Chin-ups', 'Dips', 'Push-ups'].some(bw => 
+                ex.name.toLowerCase().includes(bw.toLowerCase())
+              );
+              
               return (
                 <div key={ex.id} className="bg-zinc-900 rounded-2xl p-4">
                   <div className="flex justify-between items-center mb-2">
                     <h3 className="font-medium text-sm">{ex.name}</h3>
-                    {prs[ex.name] && <span className="text-xs text-violet-400">PR: {prs[ex.name].weight}kg</span>}
+                    {isBodyweight ? (
+                      <span className="text-xs text-violet-400">Best: {Math.max(...data.map(d => d.reps))} reps</span>
+                    ) : (
+                      prs[ex.name] && <span className="text-xs text-violet-400">PR: {prs[ex.name].weight}kg</span>
+                    )}
                   </div>
                   <ResponsiveContainer width="100%" height={100}>
                     <LineChart data={data}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#333" />
                       <XAxis dataKey="date" tick={{ fill: '#888', fontSize: 10 }} />
-                      <YAxis tick={{ fill: '#888', fontSize: 10 }} domain={['dataMin - 5', 'dataMax + 5']} />
-                      <Tooltip contentStyle={{ background: '#1a1a1a', border: 'none', borderRadius: 8, fontSize: 12 }} />
-                      <Line type="monotone" dataKey="weight" stroke="#8b5cf6" strokeWidth={2} dot={{ fill: '#8b5cf6', r: 3 }} />
+                      <YAxis tick={{ fill: '#888', fontSize: 10 }} />
+                      <Tooltip 
+                        contentStyle={{ background: '#1a1a1a', border: 'none', borderRadius: 8, fontSize: 12 }} 
+                        formatter={(val) => [isBodyweight ? `${val} reps` : `${val} kg`, isBodyweight ? 'Total Reps' : 'Weight']}
+                      />
+                      <Line type="monotone" dataKey="value" stroke="#8b5cf6" strokeWidth={2} dot={{ fill: '#8b5cf6', r: 3 }} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
