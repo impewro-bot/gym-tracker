@@ -34,7 +34,7 @@ const PPL_EXERCISES = {
   ]
 };
 
-const INITIAL_MESSAGE = { role: 'assistant', content: "Hey! Log your workout in shorthand:\n\n• \"Bench 8,8,7 at 65kg\"\n• \"Pull-ups 8,7,6, felt heavy\"\n• \"Lat pulldown 10,10,9, smooth\"\n\nAdd notes after a comma (optional) — I'll factor them into progression.\n\nTap 📋 for progress report.\n\nWhat's today — Push, Pull, or Legs?" };
+const INITIAL_MESSAGE = { role: 'assistant', content: "Hey! Log your workout:\n\n• \"Lat pulldown 82kg 12,12,11\"\n• \"Pull-ups 8,7,6\" (bodyweight)\n• \"Bench 60x5, 70x3, 80x1\" (ramping)\n• Add notes: \"...felt heavy\" or \"...smooth\"\n\nI'll auto-add new exercises to your library.\n\nTap 📋 for progress report.\n\nWhat's today?" };
 
 export default function GymTracker() {
   const [tab, setTab] = useState('chat');
@@ -204,43 +204,53 @@ export default function GymTracker() {
 
     const systemPrompt = `You are a gym coach AI for a Push/Pull/Legs workout tracker. ALL WEIGHTS ARE IN KG. Be concise.
 
-EXERCISES BY DAY:
+CURRENT EXERCISE LIBRARY:
 Push: ${exercises.Push.map(e => e.name).join(', ')}
 Pull: ${exercises.Pull.map(e => e.name).join(', ')}
 Legs: ${exercises.Legs.map(e => e.name).join(', ')}
 
-BODYWEIGHT EXERCISES (track reps only, weight = 0): Pull-ups, Chin-ups, Dips, Push-ups
-
 LAST SESSION DATA (notes in [brackets]):
 ${formatLastSession()}
 
-YOUR JOB:
-1. Parse shorthand like "lat pulldown 10,10,9" or "bench 8,8,7 at 65kg" or "pull-ups same as last"
-2. BODYWEIGHT: If just reps with no weight (e.g. "pull-ups 8,7,6"), set weight to 0
-3. Notes after comma: "bench 8,8,7 at 65kg, felt heavy"
-4. "same as last" = use exact sets/reps/weight from last session
-5. If no weight and not bodyweight, use last session's weight
-6. Compare to last session, give feedback
-7. For bodyweight, track TOTAL REPS as progress
+CRITICAL RULES:
+1. ONLY output JSON when user logs actual workout data with reps/weights
+2. DO NOT output JSON for: "today is X day", "done", "finish", "what should I do", questions, etc.
+3. For new exercises not in library, still log them - use exact name user provides
+4. BODYWEIGHT (weight=0): Pull-ups, Chin-ups, Dips, Push-ups - when user gives just reps
+5. Parse flexible formats: "bench 60x5, 70x3" or "bench 5,5,5 at 60kg" or "bench 60kg 5,5,5"
 
-RESPONSE FORMAT:
+WHEN USER LOGS WORKOUT (has reps/weights):
+Output JSON then summary:
 \`\`\`json
-{"workouts":[{"exercise":"Pull-ups","day":"Pull","sets":[{"r":8,"w":0},{"r":7,"w":0},{"r":6,"w":0}],"notes":""}]}
+{"workouts":[{"exercise":"Lat Pulldown","day":"Pull","sets":[{"r":12,"w":82},{"r":12,"w":82},{"r":11,"w":82}],"notes":""}]}
 \`\`\`
 
-Then:
 Logged 👍
+[Exercise Name]
+[Weight] kg → [reps] (Last: [X])
+[Smart recommendation - see below]
 
-🧾 [Day] Day
+WHEN USER SAYS "today is X day" or "X day":
+Just acknowledge and ask for exercises. NO JSON.
+"Ready for [Day] day! Log your exercises."
 
-1️⃣ [Exercise]
-[Weight kg → reps OR Total reps: X] (Last: Y)
-[✅/➡️/⚠️ status]
-🔜 Next: [target]
+WHEN USER SAYS "done" or "finish" or "that's it":
+Just acknowledge. NO JSON. Don't re-log anything.
+"Nice session! 💪"
 
-PROGRESSION: Factor in notes. "felt heavy"→hold weight. "cheated"→repeat. "smooth"→progress. Bodyweight: +1 rep = progress.
+SMART PROGRESSION (not just "+2.5kg or +1 rep"):
+- Compare to LAST SESSION specifically
+- If ALL sets hit 12+ reps cleanly → "Ready for +2.5kg next time"
+- If reps improved from last time → "Good progress! Keep this weight, aim for [specific target]"
+- If reps same as last → "Holding steady. Try for +1 on set 1 next time"  
+- If reps dropped → "Recovery day? Stay here, focus on form"
+- If notes say "heavy/grind" → "Felt heavy - stay at this weight until it feels easier"
+- If notes say "easy/smooth" → "Felt easy - bump up next session"
+- If doing pyramid/ramping sets (different weights) → acknowledge max attempt
+- For bodyweight: track total reps, suggest +1-2 total reps
+- Be SPECIFIC: "Aim for 12,12,12 next time" not generic advice
 
-Keep SHORT.`;
+Keep responses SHORT. One line per exercise max.`;
 
     try {
       const conversationHistory = messages.slice(1).map(m => ({ role: m.role, content: m.content }));
@@ -256,13 +266,25 @@ Keep SHORT.`;
       
       const assistantContent = data.choices?.[0]?.message?.content || "Sorry, couldn't process that.";
       
+      // Parse JSON and save workouts
       const jsonMatch = assistantContent.match(/```json\n?([\s\S]*?)\n?```/);
       if (jsonMatch) {
         try {
           const action = JSON.parse(jsonMatch[1]);
           if (action.workouts?.length) {
             const today = new Date().toISOString().split('T')[0];
-            const newWorkouts = action.workouts.map((w, i) => ({ id: Date.now() + i, date: today, day: w.day || currentDay || 'Push', exercise: w.exercise, sets: w.sets, notes: w.notes || '' }));
+            const newWorkouts = action.workouts.map((w, i) => {
+              // Auto-add exercise to library if not exists
+              const day = w.day || currentDay || 'Push';
+              const exerciseExists = exercises[day]?.some(e => e.name.toLowerCase() === w.exercise.toLowerCase());
+              if (!exerciseExists && w.exercise) {
+                setExercises(prev => ({
+                  ...prev,
+                  [day]: [...prev[day], { id: Date.now() + i + 1000, name: w.exercise, defaultSets: 3, defaultReps: 10 }]
+                }));
+              }
+              return { id: Date.now() + i, date: today, day, exercise: w.exercise, sets: w.sets, notes: w.notes || '' };
+            });
             setHistory(h => [...h, ...newWorkouts]);
             if (action.workouts[0]?.day) setCurrentDay(action.workouts[0].day);
           }
